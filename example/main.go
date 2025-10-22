@@ -148,13 +148,13 @@ func main() {
 	fmt.Println("\n=== Callback Integration Example ===")
 	
 	// Set up save callback (simulating database save)
-	authManager.SetSaveUserCallback(func(user *perms.User) error {
+	perms.SetGlobalSaveUserCallback(func(user *perms.User) error {
 		fmt.Printf("Saving user %s to database...\n", user.Name)
 		return nil
 	})
 	
 	// Set up load callback (simulating database load)
-	authManager.SetLoadUserCallback(func(userID string) (*perms.User, error) {
+	perms.SetGlobalLoadUserCallback(func(userID string) (*perms.User, error) {
 		fmt.Printf("Loading user %s from database...\n", userID)
 		// Return a mock user for demonstration
 		user := perms.NewUser(userID, "Loaded User")
@@ -183,7 +183,7 @@ func main() {
 	fmt.Println("\n=== Authorization Callback Example ===")
 	
 	// Set up authorization lookup callback (simulating database lookup)
-	authManager.SetUserLookupCallback(func(userID string) ([]string, []string, error) {
+	perms.SetGlobalUserLookupCallback(func(userID string) ([]string, []string, error) {
 		fmt.Printf("Looking up roles and permissions for user %s...\n", userID)
 		
 		// Simulate database lookup

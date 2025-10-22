@@ -460,14 +460,14 @@ func TestAuthManagerCallbacks(t *testing.T) {
 	var lastLoadUserID string
 	
 	// Set up save callback
-	am.SetSaveUserCallback(func(user *User) error {
+	SetGlobalSaveUserCallback(func(user *User) error {
 		saveCallCount++
 		lastSavedUser = user
 		return nil
 	})
 	
 	// Set up load callback
-	am.SetLoadUserCallback(func(userID string) (*User, error) {
+	SetGlobalLoadUserCallback(func(userID string) (*User, error) {
 		loadCallCount++
 		lastLoadUserID = userID
 		
@@ -512,7 +512,7 @@ func TestAuthManagerCallbacks(t *testing.T) {
 	assert.Equal(t, 3, saveCallCount)
 	
 	// Test save callback error handling
-	am.SetSaveUserCallback(func(user *User) error {
+	SetGlobalSaveUserCallback(func(user *User) error {
 		return fmt.Errorf("save error")
 	})
 	
@@ -521,7 +521,7 @@ func TestAuthManagerCallbacks(t *testing.T) {
 	assert.Contains(t, err.Error(), "save error")
 	
 	// Test load callback error handling
-	am.SetLoadUserCallback(func(userID string) (*User, error) {
+	SetGlobalLoadUserCallback(func(userID string) (*User, error) {
 		return nil, fmt.Errorf("load error")
 	})
 	
@@ -541,7 +541,7 @@ func TestAuthManagerAuthorizationCallbacks(t *testing.T) {
 	userRole.AddPermissionStrings("/posts:read", "/posts:create")
 	
 	// Set up authorization lookup callback
-	am.SetUserLookupCallback(func(userID string) ([]string, []string, error) {
+	SetGlobalUserLookupCallback(func(userID string) ([]string, []string, error) {
 		switch userID {
 		case "admin1":
 			return []string{"admin"}, []string{"/admin/settings:read"}, nil
@@ -591,7 +591,7 @@ func TestAuthManagerAuthorizationCallbacks(t *testing.T) {
 	assert.False(t, am.HasRole("nonexistent", "admin"))
 	
 	// Test fallback to in-memory when callback is nil
-	am.SetUserLookupCallback(nil)
+	SetGlobalUserLookupCallback(nil)
 	
 	// Create user in memory
 	user := am.CreateUser("memory_user", "Memory User")
@@ -600,6 +600,103 @@ func TestAuthManagerAuthorizationCallbacks(t *testing.T) {
 	assert.True(t, am.Authorize("memory_user", "/admin/settings", "read"))
 	assert.True(t, am.HasRoute("memory_user", "/admin/settings"))
 	assert.True(t, am.HasRole("memory_user", "admin"))
+}
+
+func TestGlobalCallbacks(t *testing.T) {
+	// Clear any existing global callbacks
+	ClearGlobalCallbacks()
+	
+	am := NewAuthManager()
+	
+	// Track callback calls
+	var loadCallCount int
+	var saveCallCount int
+	var lookupCallCount int
+	var lastSavedUser *User
+	var lastLoadUserID string
+	
+	// Set up global save callback
+	SetGlobalSaveUserCallback(func(user *User) error {
+		saveCallCount++
+		lastSavedUser = user
+		return nil
+	})
+	
+	// Set up global load callback
+	SetGlobalLoadUserCallback(func(userID string) (*User, error) {
+		loadCallCount++
+		lastLoadUserID = userID
+		
+		// Return a mock user for testing
+		user := NewUser(userID, "Loaded User")
+		role := NewRole("admin")
+		role.AddPermissionStrings("/admin/*")
+		user.AddRole(role)
+		return user, nil
+	})
+	
+	// Set up global authorization lookup callback
+	SetGlobalUserLookupCallback(func(userID string) ([]string, []string, error) {
+		lookupCallCount++
+		
+		switch userID {
+		case "admin1":
+			return []string{"admin"}, []string{"/admin/settings:read"}, nil
+		case "user1":
+			return []string{"user"}, []string{"/posts:read"}, nil
+		default:
+			return []string{}, []string{}, nil
+		}
+	})
+	
+	// Test global save callback
+	am.CreateUser("user1", "John Doe")
+	adminRole := am.CreateRole("admin")
+	adminRole.AddPermissionStrings("/admin/*")
+	
+	err := am.AssignRole("user1", "admin")
+	require.NoError(t, err)
+	assert.Equal(t, 1, saveCallCount)
+	assert.Equal(t, "user1", lastSavedUser.ID)
+	
+	// Test global load callback
+	am.ClearUser("user1")
+	loadedUser, exists := am.GetUser("user1")
+	require.True(t, exists)
+	assert.Equal(t, 1, loadCallCount)
+	assert.Equal(t, "user1", lastLoadUserID)
+	assert.Equal(t, "Loaded User", loadedUser.Name)
+	
+	// Test global authorization lookup callback
+	assert.True(t, am.Authorize("admin1", "/admin/settings", "read"))
+	assert.True(t, am.HasRole("admin1", "admin"))
+	assert.True(t, am.HasRoute("admin1", "/admin/settings"))
+	
+	assert.True(t, am.Authorize("user1", "/posts", "read"))
+	assert.False(t, am.Authorize("user1", "/admin/settings", "read"))
+	
+	assert.Equal(t, 5, lookupCallCount) // 5 calls: Authorize (2), HasRole (2), HasRoute (1)
+	
+	// Test global callback getters
+	assert.NotNil(t, GetGlobalSaveUserCallback())
+	assert.NotNil(t, GetGlobalLoadUserCallback())
+	assert.NotNil(t, GetGlobalUserLookupCallback())
+	assert.True(t, HasGlobalCallbacks())
+	
+	// Test clearing global callbacks
+	ClearGlobalCallbacks()
+	assert.Nil(t, GetGlobalSaveUserCallback())
+	assert.Nil(t, GetGlobalLoadUserCallback())
+	assert.Nil(t, GetGlobalUserLookupCallback())
+	assert.False(t, HasGlobalCallbacks())
+	
+	// Test fallback to in-memory when global callbacks are cleared
+	user2 := am.CreateUser("user2", "Jane Doe")
+	user2.AddRole(adminRole)
+	
+	assert.True(t, am.Authorize("user2", "/admin/settings", "read"))
+	assert.True(t, am.HasRole("user2", "admin"))
+	assert.True(t, am.HasRoute("user2", "/admin/settings"))
 }
 
 func TestAuthManagerWithRegexPermissions(t *testing.T) {

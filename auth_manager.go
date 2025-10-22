@@ -23,11 +23,6 @@ type AuthManager struct {
 	roles map[string]*Role
 	users map[string]*User
 	mutex sync.RWMutex
-	
-	// Callback functions for external storage integration
-	loadUserCallback LoadUserCallback
-	saveUserCallback SaveUserCallback
-	userLookupCallback UserLookupCallback
 }
 
 // NewAuthManager creates a new authorization manager
@@ -36,27 +31,6 @@ func NewAuthManager() *AuthManager {
 		roles: make(map[string]*Role),
 		users: make(map[string]*User),
 	}
-}
-
-// SetLoadUserCallback sets the callback function for loading user data from external storage
-func (am *AuthManager) SetLoadUserCallback(callback LoadUserCallback) {
-	am.mutex.Lock()
-	defer am.mutex.Unlock()
-	am.loadUserCallback = callback
-}
-
-// SetSaveUserCallback sets the callback function for saving user data to external storage
-func (am *AuthManager) SetSaveUserCallback(callback SaveUserCallback) {
-	am.mutex.Lock()
-	defer am.mutex.Unlock()
-	am.saveUserCallback = callback
-}
-
-// SetUserLookupCallback sets the callback function for looking up user permissions during authorization
-func (am *AuthManager) SetUserLookupCallback(callback UserLookupCallback) {
-	am.mutex.Lock()
-	defer am.mutex.Unlock()
-	am.userLookupCallback = callback
 }
 
 // CreateRole creates a new role with the given name
@@ -89,18 +63,18 @@ func (am *AuthManager) CreateUser(id, name string) *User {
 }
 
 // GetUser retrieves a user by ID
-// If the user is not in memory and a load callback is set, it will attempt to load from external storage
+// If the user is not in memory and a global load callback is set, it will attempt to load from external storage
 func (am *AuthManager) GetUser(id string) (*User, bool) {
 	am.mutex.RLock()
 	user, exists := am.users[id]
-	loadCallback := am.loadUserCallback
 	am.mutex.RUnlock()
 	
 	if exists {
 		return user, true
 	}
 	
-	// Try to load from external storage if callback is set
+	// Try to load from external storage if global callback is set
+	loadCallback := GetGlobalLoadUserCallback()
 	if loadCallback != nil {
 		loadedUser, err := loadCallback(id)
 		if err == nil && loadedUser != nil {
@@ -131,9 +105,10 @@ func (am *AuthManager) AssignRole(userID, roleName string) error {
 	
 	user.AddRole(role)
 	
-	// Save user to external storage if callback is set
-	if am.saveUserCallback != nil {
-		return am.saveUserCallback(user)
+	// Save user to external storage if global callback is set
+	saveCallback := GetGlobalSaveUserCallback()
+	if saveCallback != nil {
+		return saveCallback(user)
 	}
 	
 	return nil
@@ -154,9 +129,10 @@ func (am *AuthManager) RemoveRole(userID, roleName string) error {
 		if role.Name == roleName {
 			user.Roles = append(user.Roles[:i], user.Roles[i+1:]...)
 			
-			// Save user to external storage if callback is set
-			if am.saveUserCallback != nil {
-				return am.saveUserCallback(user)
+			// Save user to external storage if global callback is set
+			saveCallback := GetGlobalSaveUserCallback()
+			if saveCallback != nil {
+				return saveCallback(user)
 			}
 			
 			return nil
@@ -167,13 +143,10 @@ func (am *AuthManager) RemoveRole(userID, roleName string) error {
 }
 
 // Authorize checks if a user has permission to perform an action on a resource
-// If a user lookup callback is set, it will use that for efficient authorization without loading the full user
+// If a global user lookup callback is set, it will use that for efficient authorization without loading the full user
 func (am *AuthManager) Authorize(userID, resource, action string) bool {
-	am.mutex.RLock()
-	userLookupCallback := am.userLookupCallback
-	am.mutex.RUnlock()
-	
-	// Use lookup callback if available (more efficient)
+	// Use global lookup callback if available (more efficient)
+	userLookupCallback := GetGlobalUserLookupCallback()
 	if userLookupCallback != nil {
 		roles, permissions, err := userLookupCallback(userID)
 		if err != nil {
@@ -225,13 +198,10 @@ func (am *AuthManager) AuthorizeUser(user *User, resource, action string) bool {
 
 // HasRoute checks if a user has access to a specific route (ignoring action)
 // This is useful for route-based authentication where the action is embedded in the route
-// If a user lookup callback is set, it will use that for efficient authorization without loading the full user
+// If a global user lookup callback is set, it will use that for efficient authorization without loading the full user
 func (am *AuthManager) HasRoute(userID, resource string) bool {
-	am.mutex.RLock()
-	userLookupCallback := am.userLookupCallback
-	am.mutex.RUnlock()
-	
-	// Use lookup callback if available (more efficient)
+	// Use global lookup callback if available (more efficient)
+	userLookupCallback := GetGlobalUserLookupCallback()
 	if userLookupCallback != nil {
 		roles, permissions, err := userLookupCallback(userID)
 		if err != nil {
@@ -282,13 +252,10 @@ func (am *AuthManager) HasRouteUser(user *User, resource string) bool {
 }
 
 // HasRole checks if a user has a specific role
-// If a user lookup callback is set, it will use that for efficient role checking without loading the full user
+// If a global user lookup callback is set, it will use that for efficient role checking without loading the full user
 func (am *AuthManager) HasRole(userID, roleName string) bool {
-	am.mutex.RLock()
-	userLookupCallback := am.userLookupCallback
-	am.mutex.RUnlock()
-	
-	// Use lookup callback if available (more efficient)
+	// Use global lookup callback if available (more efficient)
+	userLookupCallback := GetGlobalUserLookupCallback()
 	if userLookupCallback != nil {
 		roles, _, err := userLookupCallback(userID)
 		if err != nil {
@@ -378,19 +345,19 @@ func (am *AuthManager) DeleteUser(id string) error {
 	return nil
 }
 
-// SaveUser manually saves a user to external storage using the save callback
+// SaveUser manually saves a user to external storage using the global save callback
 func (am *AuthManager) SaveUser(userID string) error {
 	am.mutex.RLock()
 	user, exists := am.users[userID]
-	saveCallback := am.saveUserCallback
 	am.mutex.RUnlock()
 	
 	if !exists {
 		return fmt.Errorf("user %s not found", userID)
 	}
 	
+	saveCallback := GetGlobalSaveUserCallback()
 	if saveCallback == nil {
-		return fmt.Errorf("save callback not set")
+		return fmt.Errorf("global save callback not set")
 	}
 	
 	return saveCallback(user)
@@ -416,9 +383,10 @@ func (am *AuthManager) LoadUserFromDB(user *User) error {
 		user.AddRole(role)
 	}
 	
-	// Save user to external storage if callback is set
-	if am.saveUserCallback != nil {
-		return am.saveUserCallback(user)
+	// Save user to external storage if global callback is set
+	saveCallback := GetGlobalSaveUserCallback()
+	if saveCallback != nil {
+		return saveCallback(user)
 	}
 	
 	return nil

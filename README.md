@@ -637,9 +637,108 @@ This example shows how to:
 - Handle session-based authentication
 - Implement dynamic permission checking
 
-## Save/Load Callback Integration
+## Global Callback Integration
 
-For more flexible database integration, you can use save/load callbacks to automatically persist user data:
+For maximum efficiency and consistency, the library uses **global callbacks** instead of instance-level callbacks. This approach provides several advantages:
+
+- **Memory Efficiency**: No callback references stored in every AuthManager instance
+- **Configuration Simplicity**: Set callbacks once, use everywhere
+- **Consistency**: All AuthManager instances use the same database configuration
+- **Testing**: Easier to mock and test with global callbacks
+
+### Setting Up Global Callbacks
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    
+    "gorm.io/driver/sqlite"
+    "gorm.io/gorm"
+    "github.com/ralfonso-directnic/perms"
+)
+
+func main() {
+    // Initialize database
+    db, err := gorm.Open(sqlite.Open("auth.db"), &gorm.Config{})
+    if err != nil {
+        log.Fatal("Failed to connect to database:", err)
+    }
+    
+    // Set up global callbacks (done once at application startup)
+    perms.SetGlobalLoadUserCallback(func(userID string) (*perms.User, error) {
+        return loadUserFromDB(db, userID)
+    })
+    
+    perms.SetGlobalSaveUserCallback(func(user *perms.User) error {
+        return saveUserToDB(db, user)
+    })
+    
+    perms.SetGlobalUserLookupCallback(func(userID string) ([]string, []string, error) {
+        return getUserRolesAndPermissions(db, userID)
+    })
+    
+    // Now all AuthManager instances automatically use these callbacks
+    authManager1 := perms.NewAuthManager()
+    authManager2 := perms.NewAuthManager()
+    
+    // Both instances use the same global callbacks
+    canAccess1 := authManager1.Authorize("user1", "/admin/settings", "read")
+    canAccess2 := authManager2.Authorize("user1", "/admin/settings", "read")
+    
+    fmt.Printf("Both managers give same result: %v\n", canAccess1 == canAccess2)
+}
+```
+
+### Global Callback Functions
+
+```go
+// Set global callbacks
+perms.SetGlobalLoadUserCallback(loadUserFromDB)
+perms.SetGlobalSaveUserCallback(saveUserToDB)
+perms.SetGlobalUserLookupCallback(getUserRolesAndPermissions)
+
+// Get global callbacks
+loadCallback := perms.GetGlobalLoadUserCallback()
+saveCallback := perms.GetGlobalSaveUserCallback()
+lookupCallback := perms.GetGlobalUserLookupCallback()
+
+// Check if any global callbacks are set
+hasCallbacks := perms.HasGlobalCallbacks()
+
+// Clear all global callbacks (useful for testing)
+perms.ClearGlobalCallbacks()
+```
+
+### Benefits of Global Callbacks
+
+- **Single Configuration**: Set callbacks once at application startup
+- **Memory Efficient**: No callback storage per AuthManager instance
+- **Consistent Behavior**: All instances use the same database configuration
+- **Easy Testing**: Clear callbacks between tests
+- **Thread Safe**: Global callbacks are protected by mutexes
+
+### Migration from Instance Callbacks
+
+If you were using the old instance-level callbacks, here's how to migrate:
+
+```go
+// OLD WAY (instance-level callbacks)
+authManager := perms.NewAuthManager()
+authManager.SetLoadUserCallback(loadUserFromDB)
+authManager.SetSaveUserCallback(saveUserToDB)
+authManager.SetUserLookupCallback(getUserRolesAndPermissions)
+
+// NEW WAY (global callbacks)
+perms.SetGlobalLoadUserCallback(loadUserFromDB)
+perms.SetGlobalSaveUserCallback(saveUserToDB)
+perms.SetGlobalUserLookupCallback(getUserRolesAndPermissions)
+authManager := perms.NewAuthManager() // Automatically uses global callbacks
+```
+
+## Save/Load Callback Integration
 
 ### Setting Up Callbacks
 
@@ -821,8 +920,8 @@ func main() {
     // Create authorization manager
     authManager := perms.NewAuthManager()
     
-    // Set up authorization lookup callback
-    authManager.SetUserLookupCallback(func(userID string) ([]string, []string, error) {
+    // Set up global authorization lookup callback
+    perms.SetGlobalUserLookupCallback(func(userID string) ([]string, []string, error) {
         return getUserRolesAndPermissions(db, userID)
     })
     
@@ -929,17 +1028,17 @@ func main() {
     authManager := perms.NewAuthManager()
     
     // For user management operations (load full user)
-    authManager.SetLoadUserCallback(func(userID string) (*perms.User, error) {
+    perms.SetGlobalLoadUserCallback(func(userID string) (*perms.User, error) {
         return loadUserFromDB(db, userID)
     })
     
     // For authorization checks (get roles/permissions only)
-    authManager.SetUserLookupCallback(func(userID string) ([]string, []string, error) {
+    perms.SetGlobalUserLookupCallback(func(userID string) ([]string, []string, error) {
         return getUserRolesAndPermissions(db, userID)
     })
     
     // For saving user changes
-    authManager.SetSaveUserCallback(func(user *perms.User) error {
+    perms.SetGlobalSaveUserCallback(func(user *perms.User) error {
         return saveUserToDB(db, user)
     })
     
