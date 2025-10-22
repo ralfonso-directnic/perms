@@ -34,13 +34,20 @@ func NewAuthManager() *AuthManager {
 }
 
 // CreateRole creates a new role with the given name
-func (am *AuthManager) CreateRole(name string) *Role {
+func (am *AuthManager) CreateRole(name string) (*Role, error) {
+	if err := ValidateRoleName(name); err != nil {
+		LogError("Invalid role name", "name", name, "error", err)
+		return nil, err
+	}
+	
 	am.mutex.Lock()
 	defer am.mutex.Unlock()
 	
 	role := NewRole(name)
 	am.roles[name] = role
-	return role
+	
+	LogInfo("Role created", "name", name)
+	return role, nil
 }
 
 // GetRole retrieves a role by name
@@ -53,13 +60,24 @@ func (am *AuthManager) GetRole(name string) (*Role, bool) {
 }
 
 // CreateUser creates a new user with the given ID and name
-func (am *AuthManager) CreateUser(id, name string) *User {
+func (am *AuthManager) CreateUser(id, name string) (*User, error) {
+	if err := ValidateUserID(id); err != nil {
+		LogError("Invalid user ID", "id", id, "error", err)
+		return nil, err
+	}
+	
+	if name == "" || len(name) > 200 {
+		return nil, ValidationError{Field: "name", Message: "name cannot be empty or exceed 200 characters"}
+	}
+	
 	am.mutex.Lock()
 	defer am.mutex.Unlock()
 	
 	user := NewUser(id, name)
 	am.users[id] = user
-	return user
+	
+	LogInfo("User created", "id", id, "name", name)
+	return user, nil
 }
 
 // GetUser retrieves a user by ID
@@ -90,17 +108,28 @@ func (am *AuthManager) GetUser(id string) (*User, bool) {
 
 // AssignRole assigns a role to a user
 func (am *AuthManager) AssignRole(userID, roleName string) error {
+	if err := ValidateUserID(userID); err != nil {
+		LogError("Invalid user ID in AssignRole", "userID", userID, "error", err)
+		return err
+	}
+	if err := ValidateRoleName(roleName); err != nil {
+		LogError("Invalid role name in AssignRole", "roleName", roleName, "error", err)
+		return err
+	}
+	
 	am.mutex.Lock()
 	defer am.mutex.Unlock()
 	
 	user, exists := am.users[userID]
 	if !exists {
-		return fmt.Errorf("user %s not found", userID)
+		LogError("User not found in AssignRole", "userID", userID)
+		return fmt.Errorf("authorization failed")
 	}
 	
 	role, exists := am.roles[roleName]
 	if !exists {
-		return fmt.Errorf("role %s not found", roleName)
+		LogError("Role not found in AssignRole", "roleName", roleName)
+		return fmt.Errorf("authorization failed")
 	}
 	
 	user.AddRole(role)
@@ -108,9 +137,13 @@ func (am *AuthManager) AssignRole(userID, roleName string) error {
 	// Save user to external storage if global callback is set
 	saveCallback := GetGlobalSaveUserCallback()
 	if saveCallback != nil {
-		return saveCallback(user)
+		if err := saveCallback(user); err != nil {
+			globalLogger.LogCallbackError("save_user", userID, err)
+			return fmt.Errorf("authorization failed")
+		}
 	}
 	
+	LogInfo("Role assigned to user", "userID", userID, "roleName", roleName)
 	return nil
 }
 
@@ -145,11 +178,27 @@ func (am *AuthManager) RemoveRole(userID, roleName string) error {
 // Authorize checks if a user has permission to perform an action on a resource
 // If a global user lookup callback is set, it will use that for efficient authorization without loading the full user
 func (am *AuthManager) Authorize(userID, resource, action string) bool {
+	// Validate inputs
+	if err := ValidateUserID(userID); err != nil {
+		globalLogger.LogAuthFailure(userID, resource, action, "invalid user ID")
+		return false
+	}
+	if err := ValidateResource(resource); err != nil {
+		globalLogger.LogAuthFailure(userID, resource, action, "invalid resource")
+		return false
+	}
+	if err := ValidateAction(action); err != nil {
+		globalLogger.LogAuthFailure(userID, resource, action, "invalid action")
+		return false
+	}
+	
 	// Use global lookup callback if available (more efficient)
 	userLookupCallback := GetGlobalUserLookupCallback()
 	if userLookupCallback != nil {
 		roles, permissions, err := userLookupCallback(userID)
 		if err != nil {
+			globalLogger.LogCallbackError("user_lookup", userID, err)
+			globalLogger.LogAuthFailure(userID, resource, action, "callback error")
 			return false
 		}
 		
@@ -157,21 +206,24 @@ func (am *AuthManager) Authorize(userID, resource, action string) bool {
 		for _, permStr := range permissions {
 			perm := NewPermission(permStr)
 			if perm.Matches(resource, action) {
+				globalLogger.LogAuthAttempt(userID, resource, action, true, "direct permission")
 				return true
 			}
 		}
 		
-		// Check role-based permissions
+		// Check role-based permissions - hold lock during entire check to prevent race conditions
+		am.mutex.RLock()
+		defer am.mutex.RUnlock()
+		
 		for _, roleName := range roles {
-			am.mutex.RLock()
 			role, exists := am.roles[roleName]
-			am.mutex.RUnlock()
-			
 			if exists && role.HasPermission(resource, action) {
+				globalLogger.LogAuthAttempt(userID, resource, action, true, "role permission")
 				return true
 			}
 		}
 		
+		globalLogger.LogAuthAttempt(userID, resource, action, false, "no matching permissions")
 		return false
 	}
 	
@@ -181,10 +233,13 @@ func (am *AuthManager) Authorize(userID, resource, action string) bool {
 	
 	user, exists := am.users[userID]
 	if !exists {
+		globalLogger.LogAuthFailure(userID, resource, action, "user not found")
 		return false
 	}
 	
-	return user.HasPermission(resource, action)
+	allowed := user.HasPermission(resource, action)
+	globalLogger.LogAuthAttempt(userID, resource, action, allowed, "in-memory check")
+	return allowed
 }
 
 // AuthorizeUser checks if a user object has permission to perform an action on a resource
@@ -293,28 +348,68 @@ func (am *AuthManager) HasRoleUser(user *User, roleName string) bool {
 	return user.HasRole(roleName)
 }
 
-// ListRoles returns all roles
-func (am *AuthManager) ListRoles() []*Role {
+// ListRoles returns all roles with pagination
+func (am *AuthManager) ListRoles(limit, offset int) ([]*Role, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100 // Default limit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	
 	am.mutex.RLock()
 	defer am.mutex.RUnlock()
 	
 	var roles []*Role
+	count := 0
+	skipped := 0
+	
 	for _, role := range am.roles {
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		if count >= limit {
+			break
+		}
 		roles = append(roles, role)
+		count++
 	}
-	return roles
+	
+	LogInfo("Listed roles", "count", len(roles), "limit", limit, "offset", offset)
+	return roles, nil
 }
 
-// ListUsers returns all users
-func (am *AuthManager) ListUsers() []*User {
+// ListUsers returns all users with pagination
+func (am *AuthManager) ListUsers(limit, offset int) ([]*User, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100 // Default limit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	
 	am.mutex.RLock()
 	defer am.mutex.RUnlock()
 	
 	var users []*User
+	count := 0
+	skipped := 0
+	
 	for _, user := range am.users {
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		if count >= limit {
+			break
+		}
 		users = append(users, user)
+		count++
 	}
-	return users
+	
+	LogInfo("Listed users", "count", len(users), "limit", limit, "offset", offset)
+	return users, nil
 }
 
 // DeleteRole deletes a role (but doesn't remove it from users)

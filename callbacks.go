@@ -16,24 +16,46 @@ type CallbackRegistry struct {
 var globalCallbacks = &CallbackRegistry{}
 
 // SetGlobalLoadUserCallback sets the global callback for loading user data
-func SetGlobalLoadUserCallback(callback LoadUserCallback) {
+func SetGlobalLoadUserCallback(callback LoadUserCallback) error {
+	if callback == nil {
+		return ValidationError{Field: "callback", Message: "load user callback cannot be nil"}
+	}
+	
 	globalCallbacks.mutex.Lock()
 	defer globalCallbacks.mutex.Unlock()
 	globalCallbacks.loadUserCallback = callback
+	
+	LogInfo("Global load user callback set")
+	return nil
 }
 
 // SetGlobalSaveUserCallback sets the global callback for saving user data
-func SetGlobalSaveUserCallback(callback SaveUserCallback) {
+func SetGlobalSaveUserCallback(callback SaveUserCallback) error {
+	if callback == nil {
+		return ValidationError{Field: "callback", Message: "save user callback cannot be nil"}
+	}
+	
 	globalCallbacks.mutex.Lock()
 	defer globalCallbacks.mutex.Unlock()
 	globalCallbacks.saveUserCallback = callback
+	
+	LogInfo("Global save user callback set")
+	return nil
 }
 
 // SetGlobalUserLookupCallback sets the global callback for user authorization lookup
-func SetGlobalUserLookupCallback(callback UserLookupCallback) {
+func SetGlobalUserLookupCallback(callback UserLookupCallback) error {
+	// Allow nil to clear the callback
 	globalCallbacks.mutex.Lock()
 	defer globalCallbacks.mutex.Unlock()
 	globalCallbacks.userLookupCallback = callback
+	
+	if callback != nil {
+		LogInfo("Global user lookup callback set")
+	} else {
+		LogInfo("Global user lookup callback cleared")
+	}
+	return nil
 }
 
 // GetGlobalLoadUserCallback returns the global load user callback

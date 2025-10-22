@@ -349,18 +349,22 @@ func TestAuthManager(t *testing.T) {
 	am := NewAuthManager()
 	
 	// Create roles
-	adminRole := am.CreateRole("admin")
+	adminRole, err := am.CreateRole("admin")
+	require.NoError(t, err)
 	adminRole.AddPermissionStrings("/admin/*", "/users:update", "/posts:delete")
 	
-	userRole := am.CreateRole("user")
+	userRole, err := am.CreateRole("user")
+	require.NoError(t, err)
 	userRole.AddPermissionStrings("/users/self", "/posts:read", "/posts:create")
 	
 	// Create users
-	am.CreateUser("user1", "John Doe")
-	am.CreateUser("user2", "Jane Smith")
+	_, err = am.CreateUser("user1", "John Doe")
+	require.NoError(t, err)
+	_, err = am.CreateUser("user2", "Jane Smith")
+	require.NoError(t, err)
 	
 	// Assign roles
-	err := am.AssignRole("user1", "admin")
+	err = am.AssignRole("user1", "admin")
 	require.NoError(t, err)
 	
 	err = am.AssignRole("user2", "user")
@@ -480,12 +484,14 @@ func TestAuthManagerCallbacks(t *testing.T) {
 	})
 	
 	// Test automatic save on role assignment
-	am.CreateUser("user1", "John Doe")
-	adminRole := am.CreateRole("admin")
+	_, err := am.CreateUser("user1", "John Doe")
+	require.NoError(t, err)
+	adminRole, err := am.CreateRole("admin")
+	require.NoError(t, err)
 	adminRole.AddPermissionStrings("/admin/*")
 	
 	// This should trigger save callback
-	err := am.AssignRole("user1", "admin")
+	err = am.AssignRole("user1", "admin")
 	require.NoError(t, err)
 	assert.Equal(t, 1, saveCallCount)
 	assert.Equal(t, "user1", lastSavedUser.ID)
@@ -518,7 +524,7 @@ func TestAuthManagerCallbacks(t *testing.T) {
 	
 	err = am.AssignRole("user1", "admin")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "save error")
+	assert.Contains(t, err.Error(), "authorization failed")
 	
 	// Test load callback error handling
 	SetGlobalLoadUserCallback(func(userID string) (*User, error) {
@@ -534,10 +540,12 @@ func TestAuthManagerAuthorizationCallbacks(t *testing.T) {
 	am := NewAuthManager()
 	
 	// Create roles with permissions
-	adminRole := am.CreateRole("admin")
+	adminRole, err := am.CreateRole("admin")
+	require.NoError(t, err)
 	adminRole.AddPermissionStrings("/admin/*", "/users:update")
 	
-	userRole := am.CreateRole("user")
+	userRole, err := am.CreateRole("user")
+	require.NoError(t, err)
 	userRole.AddPermissionStrings("/posts:read", "/posts:create")
 	
 	// Set up authorization lookup callback
@@ -594,7 +602,8 @@ func TestAuthManagerAuthorizationCallbacks(t *testing.T) {
 	SetGlobalUserLookupCallback(nil)
 	
 	// Create user in memory
-	user := am.CreateUser("memory_user", "Memory User")
+	user, err := am.CreateUser("memory_user", "Memory User")
+	require.NoError(t, err)
 	user.AddRole(adminRole)
 	
 	assert.True(t, am.Authorize("memory_user", "/admin/settings", "read"))
@@ -650,11 +659,13 @@ func TestGlobalCallbacks(t *testing.T) {
 	})
 	
 	// Test global save callback
-	am.CreateUser("user1", "John Doe")
-	adminRole := am.CreateRole("admin")
+	_, err := am.CreateUser("user1", "John Doe")
+	require.NoError(t, err)
+	adminRole, err := am.CreateRole("admin")
+	require.NoError(t, err)
 	adminRole.AddPermissionStrings("/admin/*")
 	
-	err := am.AssignRole("user1", "admin")
+	err = am.AssignRole("user1", "admin")
 	require.NoError(t, err)
 	assert.Equal(t, 1, saveCallCount)
 	assert.Equal(t, "user1", lastSavedUser.ID)
@@ -691,7 +702,8 @@ func TestGlobalCallbacks(t *testing.T) {
 	assert.False(t, HasGlobalCallbacks())
 	
 	// Test fallback to in-memory when global callbacks are cleared
-	user2 := am.CreateUser("user2", "Jane Doe")
+	user2, err := am.CreateUser("user2", "Jane Doe")
+	require.NoError(t, err)
 	user2.AddRole(adminRole)
 	
 	assert.True(t, am.Authorize("user2", "/admin/settings", "read"))
@@ -699,11 +711,39 @@ func TestGlobalCallbacks(t *testing.T) {
 	assert.True(t, am.HasRoute("user2", "/admin/settings"))
 }
 
+func TestNullLogger(t *testing.T) {
+	// Test null logger
+	nullLogger := NewNullLogger()
+	
+	// These should not panic or output anything
+	nullLogger.Debug("debug message")
+	nullLogger.Info("info message")
+	nullLogger.Warn("warning message")
+	nullLogger.Error("error message")
+	nullLogger.LogAuthAttempt("user1", "/admin/settings", "read", true, "test")
+	nullLogger.LogAuthFailure("user1", "/admin/settings", "read", "test")
+	nullLogger.LogCallbackError("test", "user1", fmt.Errorf("test error"))
+	nullLogger.LogSecurityEvent("test", map[string]interface{}{"key": "value"})
+	
+	// Test SetNullLogger function
+	SetNullLogger()
+	
+	// These should not panic or output anything
+	LogDebug("debug message")
+	LogInfo("info message")
+	LogWarn("warning message")
+	LogError("error message")
+	
+	// Reset to default logger for other tests
+	SetLogger(NewDefaultLogger(INFO))
+}
+
 func TestAuthManagerWithRegexPermissions(t *testing.T) {
 	am := NewAuthManager()
 	
 	// Create role with regex permissions
-	adminRole := am.CreateRole("admin")
+	adminRole, err := am.CreateRole("admin")
+	require.NoError(t, err)
 	adminRole.AddPermissionStrings(
 		"/admin/settings[0-9]+",  // Access to numbered settings
 		"/users/[0-9]+:update",  // Update users by ID
@@ -711,8 +751,10 @@ func TestAuthManagerWithRegexPermissions(t *testing.T) {
 	)
 	
 	// Create user
-	am.CreateUser("admin1", "Admin User")
-	am.AssignRole("admin1", "admin")
+	_, err = am.CreateUser("admin1", "Admin User")
+	require.NoError(t, err)
+	err = am.AssignRole("admin1", "admin")
+	require.NoError(t, err)
 	
 	// Test regex permission matching
 	assert.True(t, am.Authorize("admin1", "/admin/settings123", "read"))
@@ -750,11 +792,14 @@ func TestHTTPMiddleware(t *testing.T) {
 	am := NewAuthManager()
 	
 	// Create role and user
-	adminRole := am.CreateRole("admin")
+	adminRole, err := am.CreateRole("admin")
+	require.NoError(t, err)
 	adminRole.AddPermissionStrings("/admin/*", "/users:update")
 	
-	am.CreateUser("user1", "John Doe")
-	am.AssignRole("user1", "admin")
+	_, err = am.CreateUser("user1", "John Doe")
+	require.NoError(t, err)
+	err = am.AssignRole("user1", "admin")
+	require.NoError(t, err)
 	
 	// Create middleware
 	middleware := NewHTTPAuthMiddleware(am)

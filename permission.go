@@ -28,6 +28,12 @@ func (p Permission) String() string {
 // Supports formats: "/resource/action", "/resource", "resource:action"
 // Also supports regex patterns like "/admin/settings[0-9]+" or "/admin/[0-9]+"
 func NewPermission(permission string) Permission {
+	// Validate permission string first
+	if err := ValidatePermission(permission); err != nil {
+		LogError("Invalid permission string", "permission", permission, "error", err)
+		return Permission{} // Return empty permission for invalid input
+	}
+	
 	var resource, action string
 	var regexPattern *regexp.Regexp
 	
@@ -72,11 +78,26 @@ func NewPermission(permission string) Permission {
 		action = ""
 	}
 	
+	// Validate resource and action
+	if err := ValidateResource(resource); err != nil {
+		LogError("Invalid resource in permission", "resource", resource, "error", err)
+		return Permission{}
+	}
+	if action != "" {
+		if err := ValidateAction(action); err != nil {
+			LogError("Invalid action in permission", "action", action, "error", err)
+			return Permission{}
+		}
+	}
+	
 	// Check if resource contains regex patterns
 	if containsRegexPattern(resource) {
-		// Compile regex pattern
-		if compiled, err := regexp.Compile("^" + resource + "$"); err == nil {
+		// Use safe regex compilation
+		if compiled, err := SafeCompileRegex(resource); err == nil {
 			regexPattern = compiled
+		} else {
+			LogError("Failed to compile regex pattern", "pattern", resource, "error", err)
+			// Continue without regex pattern - will fall back to wildcard matching
 		}
 	}
 	

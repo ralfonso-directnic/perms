@@ -9,11 +9,22 @@ import (
 )
 
 func main() {
+	// Set up logging - you can choose different loggers:
+	// perms.SetLogger(perms.NewDefaultLogger(perms.INFO))  // Default logger with INFO level
+	// perms.SetLogger(perms.NewDefaultLogger(perms.DEBUG)) // Default logger with DEBUG level
+	// perms.SetNullLogger()                                // Null logger (no output)
+	
+	// For this example, we'll use INFO level logging
+	perms.SetLogger(perms.NewDefaultLogger(perms.INFO))
+	
 	// Create authorization manager
 	authManager := perms.NewAuthManager()
 
 	// Create roles with permissions using standard CRUD actions and regex patterns
-	adminRole := authManager.CreateRole("admin")
+	adminRole, err := authManager.CreateRole("admin")
+	if err != nil {
+		log.Fatal("Failed to create admin role:", err)
+	}
 	adminRole.AddPermissionStrings(
 		"/admin/*",                    // Access to all admin routes
 		"/users:update",               // Can update users
@@ -23,7 +34,10 @@ func main() {
 		"/users/[0-9]+:update",       // Update users by ID (regex)
 	)
 
-	userRole := authManager.CreateRole("user")
+	userRole, err := authManager.CreateRole("user")
+	if err != nil {
+		log.Fatal("Failed to create user role:", err)
+	}
 	userRole.AddPermissionStrings(
 		"/users/self",                // Can access own user data
 		"/posts:read",               // Can read posts
@@ -33,7 +47,10 @@ func main() {
 		"/posts/[0-9]+:read",        // Read specific posts by ID (regex)
 	)
 
-	moderatorRole := authManager.CreateRole("moderator")
+	moderatorRole, err := authManager.CreateRole("moderator")
+	if err != nil {
+		log.Fatal("Failed to create moderator role:", err)
+	}
 	moderatorRole.AddPermissionStrings(
 		"/posts:read",               // Can read posts
 		"/posts:update",             // Can update posts
@@ -44,9 +61,18 @@ func main() {
 	)
 
 	// Create users
-	authManager.CreateUser("admin1", "Admin User")
-	authManager.CreateUser("user1", "Regular User")
-	authManager.CreateUser("moderator1", "Moderator User")
+	_, err = authManager.CreateUser("admin1", "Admin User")
+	if err != nil {
+		log.Fatal("Failed to create admin user:", err)
+	}
+	_, err = authManager.CreateUser("user1", "Regular User")
+	if err != nil {
+		log.Fatal("Failed to create user1:", err)
+	}
+	_, err = authManager.CreateUser("moderator1", "Moderator User")
+	if err != nil {
+		log.Fatal("Failed to create moderator user:", err)
+	}
 
 	// Assign roles to users
 	authManager.AssignRole("admin1", "admin")
@@ -148,13 +174,16 @@ func main() {
 	fmt.Println("\n=== Callback Integration Example ===")
 	
 	// Set up save callback (simulating database save)
-	perms.SetGlobalSaveUserCallback(func(user *perms.User) error {
+	err = perms.SetGlobalSaveUserCallback(func(user *perms.User) error {
 		fmt.Printf("Saving user %s to database...\n", user.Name)
 		return nil
 	})
+	if err != nil {
+		log.Fatal("Failed to set save callback:", err)
+	}
 	
 	// Set up load callback (simulating database load)
-	perms.SetGlobalLoadUserCallback(func(userID string) (*perms.User, error) {
+	err = perms.SetGlobalLoadUserCallback(func(userID string) (*perms.User, error) {
 		fmt.Printf("Loading user %s from database...\n", userID)
 		// Return a mock user for demonstration
 		user := perms.NewUser(userID, "Loaded User")
@@ -163,6 +192,9 @@ func main() {
 		user.AddRole(role)
 		return user, nil
 	})
+	if err != nil {
+		log.Fatal("Failed to set load callback:", err)
+	}
 	
 	// Test automatic save on role assignment
 	fmt.Println("Assigning role (should trigger save callback):")
@@ -183,7 +215,7 @@ func main() {
 	fmt.Println("\n=== Authorization Callback Example ===")
 	
 	// Set up authorization lookup callback (simulating database lookup)
-	perms.SetGlobalUserLookupCallback(func(userID string) ([]string, []string, error) {
+	err = perms.SetGlobalUserLookupCallback(func(userID string) ([]string, []string, error) {
 		fmt.Printf("Looking up roles and permissions for user %s...\n", userID)
 		
 		// Simulate database lookup
@@ -198,6 +230,9 @@ func main() {
 			return []string{}, []string{}, nil
 		}
 	})
+	if err != nil {
+		log.Fatal("Failed to set user lookup callback:", err)
+	}
 	
 	// Test efficient authorization without loading users into memory
 	fmt.Println("Testing authorization callbacks:")
